@@ -73,12 +73,13 @@ jobs:
 
       - name: Copy files to EC2 (scp)
         run: |
+          # scripts/ec2-deploy.sh 단일 파일 scp 시 → 배포 경로/ec2-deploy.sh 로만 복사됨 (scripts/ 폴더 없음)
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -r \
             dist \
             package.json \
             tsconfig.json \
             tsconfig.build.json \
-            scripts/ec2-deploy.sh \
+            scripts \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_DEPLOY_PATH }}/"
 
       - name: Install dependencies and restart app on EC2
