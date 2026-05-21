@@ -50,6 +50,7 @@ jobs:
             package.json
             tsconfig.json
             tsconfig.build.json
+            scripts/ec2-deploy.sh
           retention-days: 7
 
   deploy:
@@ -77,17 +78,11 @@ jobs:
             package.json \
             tsconfig.json \
             tsconfig.build.json \
+            scripts/ec2-deploy.sh \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_DEPLOY_PATH }}/"
 
       - name: Install dependencies and restart app on EC2
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
-            "set -e
-             cd '${{ secrets.EC2_DEPLOY_PATH }}'
-             export NODE_ENV=production
-             npm install --omit=dev
-             pkill -f 'node dist/main' 2>/dev/null || true
-             nohup npm run start:prod >> app.log 2>&1 &
-             sleep 1
-             echo 'Deploy complete. Listening on port' \${PORT:-3000}"
+            "chmod +x '${{ secrets.EC2_DEPLOY_PATH }}/scripts/ec2-deploy.sh' && APP_DIR='${{ secrets.EC2_DEPLOY_PATH }}' bash '${{ secrets.EC2_DEPLOY_PATH }}/scripts/ec2-deploy.sh'"
