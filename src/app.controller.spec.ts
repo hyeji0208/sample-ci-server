@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { HELLO_MESSAGE } from './app.constants';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -15,8 +16,8 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it(`should return "${HELLO_MESSAGE}"`, () => {
+      expect(appController.getHello()).toBe(HELLO_MESSAGE);
     });
   });
 });
