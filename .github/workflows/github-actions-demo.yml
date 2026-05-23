@@ -15,9 +15,6 @@ env:
   NODE_VERSION: "22"
   DOCKER_IMAGE: sample-ci-server
   APP_PORT: "3000"
-  # GitHub Secrets (Settings → Secrets and variables → Actions)
-  # DOCKERHUB_USERNAME, DOCKERHUB_TOKEN — Hub 푸시 · EC2 pull
-  # EC2_HOST, EC2_USER, EC2_SSH_PRIVATE_KEY — EC2 SSH 배포
 
 jobs:
   ci:
@@ -128,6 +125,7 @@ jobs:
         env:
           DOCKER_IMAGE: ${{ needs.docker.outputs.image }}
         run: |
+          echo "DOCKER_IMAGE=${DOCKER_IMAGE}"
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
             "chmod +x /tmp/ec2-docker-deploy.sh && \
