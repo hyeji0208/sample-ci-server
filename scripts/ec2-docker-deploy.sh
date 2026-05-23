@@ -6,8 +6,10 @@ set -euo pipefail
 : "${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
 : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN is required}"
 
-CONTAINER_NAME="${CONTAINER_NAME:-sample-ci-server}"
+CONTAINER_NAME="${CONTAINER_NAME:-sample-server}"
 APP_PORT="${APP_PORT:-3000}"
+
+log() { echo "==> $*"; }
 
 if docker info &>/dev/null; then
   DOCKER=(docker)
@@ -18,16 +20,34 @@ else
   exit 1
 fi
 
-echo "==> Logging in to Docker Hub"
+free_port() {
+  log "Freeing port ${APP_PORT}"
+  "${DOCKER[@]}" stop "$CONTAINER_NAME" 2>/dev/null || true
+  "${DOCKER[@]}" rm "$CONTAINER_NAME" 2>/dev/null || true
+
+  while read -r cid; do
+    [[ -z "$cid" ]] && continue
+    log "Stopping container ${cid} using port ${APP_PORT}"
+    "${DOCKER[@]}" stop "$cid" 2>/dev/null || true
+    "${DOCKER[@]}" rm "$cid" 2>/dev/null || true
+  done < <("${DOCKER[@]}" ps -q --filter "publish=${APP_PORT}" 2>/dev/null || true)
+
+  if command -v ss >/dev/null && ss -tln 2>/dev/null | grep -q ":${APP_PORT} "; then
+    log "Port ${APP_PORT} still bound (non-Docker process); trying fuser"
+    sudo fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
+    sleep 2
+  fi
+}
+
+log "Logging in to Docker Hub"
 echo "$DOCKERHUB_TOKEN" | "${DOCKER[@]}" login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-echo "==> Pulling ${DOCKER_IMAGE}"
+log "Pulling ${DOCKER_IMAGE}"
 "${DOCKER[@]}" pull "$DOCKER_IMAGE"
 
-echo "==> Replacing container ${CONTAINER_NAME}"
-"${DOCKER[@]}" stop "$CONTAINER_NAME" 2>/dev/null || true
-"${DOCKER[@]}" rm "$CONTAINER_NAME" 2>/dev/null || true
+free_port
 
+log "Starting container ${CONTAINER_NAME}"
 "${DOCKER[@]}" run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
@@ -36,13 +56,26 @@ echo "==> Replacing container ${CONTAINER_NAME}"
   -e PORT="${APP_PORT}" \
   "$DOCKER_IMAGE"
 
-echo "==> Waiting for app on port ${APP_PORT}"
-for _ in $(seq 1 30); do
-  if curl -sf "http://127.0.0.1:${APP_PORT}/" >/dev/null; then
-    echo "==> Deploy OK (${DOCKER_IMAGE})"
+log "Waiting for app on port ${APP_PORT}"
+for i in $(seq 1 30); do
+  if command -v curl >/dev/null && curl -sf "http://127.0.0.1:${APP_PORT}/" >/dev/null; then
+    log "Deploy OK (${DOCKER_IMAGE})"
     "${DOCKER[@]}" ps --filter "name=${CONTAINER_NAME}"
     exit 0
   fi
+  if "${DOCKER[@]}" exec "$CONTAINER_NAME" node -e \
+    "require('http').get('http://127.0.0.1:${APP_PORT}/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
+    2>/dev/null; then
+    log "Deploy OK via container health check (${DOCKER_IMAGE})"
+    "${DOCKER[@]}" ps --filter "name=${CONTAINER_NAME}"
+    exit 0
+  fi
+  if ! "${DOCKER[@]}" inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
+    echo "ERROR: Container exited unexpectedly:"
+    "${DOCKER[@]}" logs --tail 50 "$CONTAINER_NAME" 2>/dev/null || true
+    exit 1
+  fi
+  echo "  ... attempt ${i}/30"
   sleep 2
 done
 

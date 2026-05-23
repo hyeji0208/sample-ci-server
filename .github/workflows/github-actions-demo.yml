@@ -13,7 +13,8 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
-  DOCKER_IMAGE: sample-ci-server
+  DOCKER_IMAGE: sample-server
+  CONTAINER_NAME: sample-server
   APP_PORT: "3000"
 
 jobs:
@@ -121,16 +122,28 @@ jobs:
             scripts/ec2-docker-deploy.sh \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/ec2-docker-deploy.sh"
 
+      - name: Verify image tag from docker job
+        run: |
+          if [ -z "${{ needs.docker.outputs.image }}" ]; then
+            echo "ERROR: docker job did not produce an image tag."
+            exit 1
+          fi
+          echo "Deploying: ${{ needs.docker.outputs.image }}"
+
       - name: Deploy container on EC2
         env:
           DOCKER_IMAGE: ${{ needs.docker.outputs.image }}
         run: |
-          echo "DOCKER_IMAGE=${DOCKER_IMAGE}"
+          printf '%s\n' \
+            "DOCKER_IMAGE=${DOCKER_IMAGE}" \
+            "DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}" \
+            "DOCKERHUB_TOKEN=${{ secrets.DOCKERHUB_TOKEN }}" \
+            "APP_PORT=${{ env.APP_PORT }}" \
+            "CONTAINER_NAME=${{ env.CONTAINER_NAME }}" \
+            > deploy.env
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            deploy.env \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/deploy.env"
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
-            "chmod +x /tmp/ec2-docker-deploy.sh && \
-             DOCKER_IMAGE='${DOCKER_IMAGE}' \
-             DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}' \
-             DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}' \
-             APP_PORT='${{ env.APP_PORT }}' \
-             bash /tmp/ec2-docker-deploy.sh"
+            "chmod +x /tmp/ec2-docker-deploy.sh && set -a && source /tmp/deploy.env && set +a && bash /tmp/ec2-docker-deploy.sh"
