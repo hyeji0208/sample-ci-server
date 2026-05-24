@@ -65,8 +65,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -82,10 +80,12 @@ jobs:
 
       - name: Image metadata
         id: meta
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE }}"
-          echo "image=${IMAGE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          echo "image_latest=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          IMAGE="${DOCKERHUB_USERNAME}/${{ env.DOCKER_IMAGE }}"
+          echo "deploy_image=${IMAGE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "deploy_image_latest=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -94,8 +94,8 @@ jobs:
           file: dockerfile
           push: true
           tags: |
-            ${{ steps.meta.outputs.image_latest }}
-            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.deploy_image_latest }}
+            ${{ steps.meta.outputs.deploy_image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -122,17 +122,19 @@ jobs:
             scripts/ec2-docker-deploy.sh \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/ec2-docker-deploy.sh"
 
-      - name: Verify image tag from docker job
+      - name: Verify deploy configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          if [ -z "${{ needs.docker.outputs.image }}" ]; then
-            echo "ERROR: docker job did not produce an image tag."
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "ERROR: DOCKERHUB_USERNAME secret is not set."
             exit 1
           fi
-          echo "Deploying: ${{ needs.docker.outputs.image }}"
+          echo "Deploying: ${DOCKERHUB_USERNAME}/${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
 
       - name: Deploy container on EC2
         env:
-          DOCKER_IMAGE: ${{ needs.docker.outputs.image }}
+          DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE }}:${{ github.sha }}
         run: |
           printf '%s\n' \
             "DOCKER_IMAGE=${DOCKER_IMAGE}" \
