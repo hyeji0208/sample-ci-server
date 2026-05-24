@@ -10,31 +10,37 @@ CONTAINER_NAME="${CONTAINER_NAME:-sample-server}"
 APP_PORT="${APP_PORT:-3000}"
 
 log() { echo "==> $*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
 if docker info &>/dev/null; then
   DOCKER=(docker)
 elif sudo docker info &>/dev/null; then
   DOCKER=(sudo docker)
 else
-  echo "ERROR: Docker is not available. Run scripts/ec2-docker-bootstrap.sh on EC2 first."
-  exit 1
+  die "Docker is not available. Run scripts/ec2-docker-bootstrap.sh on EC2 first."
 fi
 
 free_port() {
   log "Freeing port ${APP_PORT}"
-  "${DOCKER[@]}" stop "$CONTAINER_NAME" 2>/dev/null || true
-  "${DOCKER[@]}" rm "$CONTAINER_NAME" 2>/dev/null || true
+
+  "${DOCKER[@]}" rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
   while read -r cid; do
     [[ -z "$cid" ]] && continue
-    log "Stopping container ${cid} using port ${APP_PORT}"
-    "${DOCKER[@]}" stop "$cid" 2>/dev/null || true
-    "${DOCKER[@]}" rm "$cid" 2>/dev/null || true
-  done < <("${DOCKER[@]}" ps -q --filter "publish=${APP_PORT}" 2>/dev/null || true)
+    log "Removing container ${cid} (uses port ${APP_PORT})"
+    "${DOCKER[@]}" rm -f "$cid" 2>/dev/null || true
+  done < <(
+    "${DOCKER[@]}" ps -aq 2>/dev/null | while read -r cid; do
+      if "${DOCKER[@]}" port "$cid" 2>/dev/null | grep -q ":${APP_PORT}->"; then
+        echo "$cid"
+      fi
+    done
+  )
 
   if command -v ss >/dev/null && ss -tln 2>/dev/null | grep -q ":${APP_PORT} "; then
-    log "Port ${APP_PORT} still bound (non-Docker process); trying fuser"
+    log "Killing non-Docker process on port ${APP_PORT}"
     sudo fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
+    pkill -f "dist/main.js" 2>/dev/null || true
     sleep 2
   fi
 }
@@ -42,19 +48,41 @@ free_port() {
 log "Logging in to Docker Hub"
 echo "$DOCKERHUB_TOKEN" | "${DOCKER[@]}" login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-log "Pulling ${DOCKER_IMAGE}"
-"${DOCKER[@]}" pull "$DOCKER_IMAGE"
+pull_image() {
+  local image="$1"
+  log "Pulling ${image}"
+  if "${DOCKER[@]}" pull "$image"; then
+    DOCKER_IMAGE="$image"
+    return 0
+  fi
+  return 1
+}
+
+if ! pull_image "$DOCKER_IMAGE"; then
+  if [[ "$DOCKER_IMAGE" != *":latest" ]]; then
+    FALLBACK="${DOCKER_IMAGE%:*}:latest"
+    log "Pull failed; trying fallback tag ${FALLBACK}"
+    pull_image "$FALLBACK" || die "Failed to pull ${DOCKER_IMAGE} and ${FALLBACK}"
+  else
+    die "Failed to pull ${DOCKER_IMAGE}"
+  fi
+fi
 
 free_port
 
-log "Starting container ${CONTAINER_NAME}"
-"${DOCKER[@]}" run -d \
+log "Starting container ${CONTAINER_NAME} from ${DOCKER_IMAGE}"
+if ! "${DOCKER[@]}" run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
   -p "${APP_PORT}:${APP_PORT}" \
   -e NODE_ENV=production \
   -e PORT="${APP_PORT}" \
-  "$DOCKER_IMAGE"
+  "$DOCKER_IMAGE"; then
+  echo "ERROR: docker run failed. Diagnostics:"
+  "${DOCKER[@]}" ps -a --filter "name=${CONTAINER_NAME}" || true
+  ss -tln 2>/dev/null | grep ":${APP_PORT} " || true
+  die "docker run exited with code $?"
+fi
 
 log "Waiting for app on port ${APP_PORT}"
 for i in $(seq 1 30); do
